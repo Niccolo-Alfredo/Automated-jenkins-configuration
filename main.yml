@@ -1,0 +1,6 @@
+---
+# Playbook principale per setup completo Jenkins con automazione REST API per gli agent
+
+- import_playbook: ansible/yaml/docker_setup.yml
+- import_playbook: ansible/yaml/master/jenkins_master.yml
+- import_playbook: ansible/yaml/agent/jenkins_agent_multi.yml

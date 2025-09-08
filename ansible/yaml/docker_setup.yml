@@ -1,0 +1,58 @@
+- name: Setup Docker Engine and Docker network
+  hosts: jenkins
+  become: yes
+  vars:
+    docker_network_name: jenkins-net
+    docker_subnet: 172.25.0.0/16     # Subnet statica assegnata alla rete Docker
+    jenkins_master_ip: 172.25.0.10    # IP statico del container Jenkins Master
+    jenkins_agent_ip: 172.25.0.11     # IP statico del container Jenkins Agent
+  tasks:
+
+    - name: Installa le dipendenze di base (dnf plugins + pip)
+      package:
+        name:
+          - dnf-plugins-core        # Permette l'uso di dnf config-manager per aggiungere repository esterni
+          - python3-pip             # Necessario per installare moduli Python usati da Ansible (es. docker SDK)
+        state: present
+
+    - name: Aggiungi il repository Docker per sistemi RHEL-based
+      ansible.builtin.command:
+        cmd: dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+      args:
+        creates: /etc/yum.repos.d/docker-ce.repo  # Esegue solo se il file non esiste per mantenere l'idempotenza
+
+    - name: Installa Docker Engine e strumenti CLI
+      package:
+        name:
+          - docker-ce               # Motore Docker principale
+          - docker-ce-cli           # CLI per gestire Docker
+          - containerd.io           # Runtime container su cui si basa Docker
+          - docker-buildx-plugin    # Plugin per build avanzate multi-architettura
+          - docker-compose-plugin   # Plugin per supporto a docker-compose V2
+        state: present
+
+    - name: Abilita e avvia il servizio Docker
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: yes                # Garantisce che Docker venga avviato al boot
+
+    - name: Installa Docker SDK per Python
+      pip:
+        name:
+          - docker     # Libreria Python richiesta dai moduli Ansible per interagire con Docker
+          - requests   # Libreria HTTP per comunicazioni REST, utile con Jenkins API
+        executable: pip3
+
+    - name: Aggiungi l'utente vagrant al gruppo docker
+      user:
+        name: vagrant
+        groups: docker
+        append: yes                 # Aggiunge senza rimuovere i gruppi esistenti
+
+    - name: Crea rete Docker con subnet e IP statici
+      community.docker.docker_network:
+        name: "{{ docker_network_name }}"
+        driver: bridge
+        ipam_config:
+          - subnet: "{{ docker_subnet }}"  # Definizione della subnet per controllo degli IP statici

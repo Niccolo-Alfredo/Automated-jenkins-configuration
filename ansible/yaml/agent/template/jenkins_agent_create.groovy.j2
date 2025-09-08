@@ -1,0 +1,28 @@
+import hudson.model.*
+import hudson.slaves.*
+import jenkins.model.*
+import java.util.Collections
+
+def agentName = "{{ agent_name }}"
+def remoteFS = "{{ agent_remote_fs }}"
+def labels = "{{ agent_label }}"
+def description = "{{ agent_description }}"
+def numExecutors = {{ agent_executors }}
+
+def launcher = new JNLPLauncher()
+
+def agent = new DumbSlave(
+    agentName,
+    description,
+    remoteFS,
+    String.valueOf(numExecutors),
+    Node.Mode.NORMAL,
+    labels,
+    launcher,
+    new RetentionStrategy.Always(),
+    Collections.<NodeProperty<?>>emptyList()
+)
+
+Jenkins.instance.addNode(agent)
+
+return "Agent '${agentName}' creato correttamente"

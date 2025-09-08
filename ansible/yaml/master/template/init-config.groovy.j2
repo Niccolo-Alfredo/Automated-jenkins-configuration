@@ -1,0 +1,42 @@
+#!groovy
+
+import jenkins.model.*
+import hudson.security.*
+import hudson.security.csrf.DefaultCrumbIssuer
+import jenkins.security.s2m.AdminWhitelistRule
+
+def instance = Jenkins.getInstance()
+
+println "Configurazione sicurezza Jenkins..."
+
+// Impostare il numero di esecutori a zero sul master
+println "Impostazione del numero di esecutori del master a 0..."
+instance.setNumExecutors(0)
+
+// Configurazione utente admin
+def hudsonRealm = new HudsonPrivateSecurityRealm(false)
+hudsonRealm.createAccount("{{ jenkins_admin_user }}", "{{ jenkins_admin_password }}")
+instance.setSecurityRealm(hudsonRealm)
+
+// Strategia autorizzazioni
+def strategy = new FullControlOnceLoggedInAuthorizationStrategy()
+strategy.setAllowAnonymousRead(false)
+instance.setAuthorizationStrategy(strategy)
+
+// Abilita protezione CSRF
+instance.setCrumbIssuer(new DefaultCrumbIssuer(true))
+
+// Disabilita vecchi protocolli
+instance.getDescriptor("jenkins.CLI").get().setEnabled(false)
+
+// Configura URL radice Jenkins
+def jenkinsUrl = "{{ jenkins_master_url }}"
+def locationConfig = instance.getExtensionList('jenkins.model.JenkinsLocationConfiguration')[0]
+locationConfig.setUrl(jenkinsUrl)
+locationConfig.setAdminAddress("Jenkins Admin <admin@localhost>")
+locationConfig.save()
+
+instance.save()
+
+println "Configurazione sicurezza e URL completata!"
+println "URL Jenkins impostato a: ${jenkinsUrl}"

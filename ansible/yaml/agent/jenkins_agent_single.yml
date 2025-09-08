@@ -1,0 +1,79 @@
+# Task per creare un singolo agente Jenkins
+
+- name: Debug creazione agente {{ agent_name }}
+  ansible.builtin.debug:
+    msg: "Creazione agente {{ agent_name }} con IP {{ agent_ip }}"
+
+- name: Crea agent {{ agent_name }} tramite script Groovy
+  ansible.builtin.uri:
+    url: "{{ jenkins_master_url }}/scriptText"
+    method: POST
+    user: "{{ jenkins_admin_user }}"
+    password: "{{ jenkins_admin_password }}"
+    force_basic_auth: yes
+    headers:
+      Content-Type: "application/x-www-form-urlencoded"
+      Jenkins-Crumb: "{{ jenkins_crumb.json.crumb }}"
+      Cookie: "{{ jenkins_session_cookie }}"
+    body: "script={{ lookup('template', 'template/jenkins_agent_create.groovy.j2') }}"
+    status_code: 200
+  register: create_agent_response
+
+- name: Estrai il secret dell'agent {{ agent_name }}
+  ansible.builtin.uri:
+    url: "{{ jenkins_master_url }}/scriptText"
+    method: POST
+    user: "{{ jenkins_admin_user }}"
+    password: "{{ jenkins_admin_password }}"
+    force_basic_auth: yes
+    headers:
+      Content-Type: "application/x-www-form-urlencoded"
+      Jenkins-Crumb: "{{ jenkins_crumb.json.crumb }}"
+      Cookie: "{{ jenkins_session_cookie }}"
+    body: "script=println jenkins.model.Jenkins.getInstance().getComputer('{{ agent_name }}').getJnlpMac()"
+    return_content: yes
+    status_code: 200
+  register: agent_secret_response
+
+- name: Imposta il secret come variabile per {{ agent_name }}
+  ansible.builtin.set_fact:
+    agent_secret: "{{ agent_secret_response.content | trim }}"
+
+- name: Crea la working directory per {{ agent_name }}
+  ansible.builtin.file:
+    path: "{{ agent_host_path }}"
+    state: directory
+    owner: 1000
+    group: 1000
+    mode: '0755'
+    recurse: yes
+
+- name: Crea il container per {{ agent_name }}
+  community.docker.docker_container:
+    name: "{{ agent_name }}"
+    image: jenkins-agent-with-docker:latest
+    networks:
+      - name: "{{ docker_network_name }}"
+        ipv4_address: "{{ agent_ip }}"
+    env:
+      JENKINS_URL: "{{ jenkins_master_url }}"
+      JENKINS_SECRET: "{{ agent_secret }}"
+      JENKINS_AGENT_NAME: "{{ agent_name }}"
+      JENKINS_AGENT_WORKDIR: "{{ agent_remote_fs }}"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "{{ agent_host_path }}:{{ agent_remote_fs }}"
+    state: started
+    restart_policy: always
+
+- name: Testa Docker in {{ agent_name }}
+  ansible.builtin.command:
+    cmd: docker exec {{ agent_name }} docker --version
+  register: docker_version
+  failed_when: false
+  retries: 3
+  delay: 5
+
+- name: Debug test Docker per {{ agent_name }}
+  ansible.builtin.debug:
+    msg: "{{ agent_name }}: {{ 'Docker OK' if docker_version.rc == 0 else 'Docker non disponibile' }}"

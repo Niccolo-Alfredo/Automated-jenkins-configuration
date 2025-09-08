@@ -1,0 +1,11 @@
+- name: Ferma e rimuovi container Jenkins esistente
+  community.docker.docker_container:
+    name: jenkins-master
+    state: absent
+  ignore_errors: true
+
+- name: Rimuovi directory Jenkins esistente
+  ansible.builtin.file:
+    path: "{{ jenkins_home_host_path }}"
+    state: absent
+  ignore_errors: true

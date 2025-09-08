@@ -1,0 +1,16 @@
+FROM jenkins/inbound-agent:latest
+
+ARG DOCKER_GID={{ host_docker_gid }}
+
+USER root
+
+# Installa Docker CLI
+RUN apt-get update && \
+    apt-get install -y docker.io && \
+    rm -rf /var/lib/apt/lists/*
+
+# Crea gruppo docker con GID corretto e aggiungi jenkins
+RUN groupadd -g ${DOCKER_GID} docker || groupmod -g ${DOCKER_GID} docker && \
+    usermod -aG docker jenkins
+
+USER jenkins

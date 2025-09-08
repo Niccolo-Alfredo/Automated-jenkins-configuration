@@ -1,0 +1,81 @@
+- name: Attendi che Jenkins sia accessibile sulla porta 8080
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host | default('localhost') }}"
+    port: 8080
+    delay: 5
+    timeout: 300
+
+- name: Attendi installazione plugin (può richiedere riavvio automatico)
+  ansible.builtin.pause:
+    seconds: 120
+
+- name: Attendi che l'API di Jenkins risponda (primo avvio)
+  ansible.builtin.uri:
+    url: "{{ jenkins_master_url }}/api/json"
+    method: GET
+    status_code: [200, 403]
+  register: jenkins_check
+  until: jenkins_check.status in [200, 403]
+  retries: 15
+  delay: 10
+
+- name: Attendi che l'installazione dei plugin sia completata e Jenkins sia pronto per il login
+  ansible.builtin.uri:
+    url: "{{ jenkins_master_url }}/login"
+    method: GET
+    status_code: 200
+  register: jenkins_login_check
+  until: jenkins_login_check.status == 200
+  retries: 20
+  delay: 30
+
+- name: Verifica il login con le credenziali admin
+  ansible.builtin.uri:
+    url: "{{ jenkins_master_url }}/api/json"
+    method: GET
+    user: "{{ jenkins_admin_user }}"
+    password: "{{ jenkins_admin_password }}"
+    force_basic_auth: yes
+    status_code: 200
+  register: login_test
+  retries: 10
+  delay: 5
+
+- name: Ottieni informazioni su Jenkins per la verifica
+  ansible.builtin.uri:
+    url: "{{ jenkins_master_url }}/api/json?tree=jobs[name],views[name]"
+    method: GET
+    user: "{{ jenkins_admin_user }}"
+    password: "{{ jenkins_admin_password }}"
+    force_basic_auth: yes
+  register: jenkins_info
+  ignore_errors: true
+
+- name: Controlla plugin installati
+  ansible.builtin.uri:
+    url: "{{ jenkins_master_url }}/pluginManager/api/json?depth=1&tree=plugins[shortName,version,enabled]"
+    method: GET
+    user: "{{ jenkins_admin_user }}"
+    password: "{{ jenkins_admin_password }}"
+    force_basic_auth: yes
+  register: plugins_info
+  ignore_errors: true
+
+- name: Mostra plugin installati
+  debug:
+    msg: "Plugin installati: {{ plugins_info.json.plugins | length if plugins_info.json is defined else 'Informazioni non disponibili' }}"
+
+- name: Mostra stato finale Jenkins
+  debug:
+    msg: |
+      🎉 Jenkins è completamente configurato e funzionante!
+      
+      📍 URL: {{ jenkins_master_url }}
+      🔐 Credenziali:
+         Username: {{ jenkins_admin_user }}
+         Password: {{ jenkins_admin_password }}
+      
+      ✅ Login test: {{ 'SUCCESSO' if login_test.status == 200 else 'FALLITO' }}
+      📊 API Response: {{ jenkins_info.json.jobs | length if jenkins_info.json is defined else 'Non disponibile' }} jobs configurati
+      
+      🚀 Puoi accedere all'interfaccia web adesso!

@@ -1,0 +1,147 @@
+- name: Crea Agenti Jenkins multipli con REST API
+  hosts: jenkins
+  become: true
+  vars:
+    jenkins_master_url: "http://192.168.56.10:8080"
+    jenkins_admin_user: "admin"
+    jenkins_admin_password: "password"
+    new_token_name: "ansible-token"
+    
+    # Configurazione agenti multipli
+    agent_count: 2  # Cambia questo valore per creare più agenti
+    agent_base_name: "agent"
+    agent_description: "Agent created by Ansible"
+    agent_executors: 1
+    agent_remote_fs: "/home/jenkins/agent"
+    agent_label: "linux docker"
+    agent_host_base_path: "/opt/jenkins-agent"
+    
+    # Configurazione rete Docker
+    docker_network_name: jenkins-net
+    jenkins_master_ip: 172.25.0.10
+    
+  tasks:
+    # === SETUP INIZIALE ===
+    - name: Ottieni credenziali e token Jenkins
+      block:
+        - name: Ottieni il crumb e i cookie di sessione
+          ansible.builtin.uri:
+            url: "{{ jenkins_master_url }}/crumbIssuer/api/json"
+            method: GET
+            user: "{{ jenkins_admin_user }}"
+            password: "{{ jenkins_admin_password }}"
+            force_basic_auth: true
+            return_content: true
+            status_code: 200
+          register: jenkins_crumb
+
+        - name: Imposta la variabile del cookie di sessione
+          ansible.builtin.set_fact:
+            jenkins_session_cookie: "{{ jenkins_crumb.set_cookie.split(';')[0] }}"
+          when: jenkins_crumb.set_cookie is defined
+
+        - name: Genera un nuovo token API
+          ansible.builtin.uri:
+            url: "{{ jenkins_master_url }}/me/descriptorByName/jenkins.security.ApiTokenProperty/generateNewToken"
+            method: POST
+            user: "{{ jenkins_admin_user }}"
+            password: "{{ jenkins_admin_password }}"
+            force_basic_auth: true
+            headers:
+              Content-Type: "application/x-www-form-urlencoded"
+              Jenkins-Crumb: "{{ jenkins_crumb.json.crumb }}"
+              Cookie: "{{ jenkins_session_cookie }}"
+            body: "newTokenName={{ new_token_name }}"
+            return_content: true
+            status_code: 200
+          register: jenkins_api_token
+
+    # === SETUP DOCKER E IMMAGINE ===
+    - name: Setup Docker e immagine personalizzata
+      block:
+        - name: Assicurati che i permessi del socket Docker siano corretti
+          ansible.builtin.file:
+            path: /var/run/docker.sock
+            owner: root
+            group: docker
+            mode: '0660'
+
+        - name: Ottieni GID del gruppo docker dall'host
+          ansible.builtin.command: getent group docker
+          register: host_docker_group
+          changed_when: false
+
+        - name: Imposta GID docker dell'host
+          ansible.builtin.set_fact:
+            host_docker_gid: "{{ host_docker_group.stdout.split(':')[2] }}"
+
+        - name: Verifica se l'immagine jenkins-agent-with-docker esiste già
+          community.docker.docker_image_info:
+            name: jenkins-agent-with-docker:latest
+          register: agent_image_info
+
+        - name: Prepara immagine personalizzata se non esiste
+          when: not agent_image_info.images
+          block:
+            - name: Crea directory per Dockerfile
+              ansible.builtin.file:
+                path: /tmp/jenkins-agent-docker
+                state: directory
+
+            - name: Crea Dockerfile con GID corretto
+              ansible.builtin.template:
+                src: jenkins-agent.Dockerfile.j2
+                dest: /tmp/jenkins-agent-docker/Dockerfile
+
+            - name: Build immagine personalizzata
+              community.docker.docker_image:
+                build:
+                  path: /tmp/jenkins-agent-docker
+                  args:
+                    DOCKER_GID: "{{ host_docker_gid }}"
+                name: jenkins-agent-with-docker
+                tag: latest
+                source: build
+
+    # === CREAZIONE AGENTI MULTIPLI ===
+    - name: Crea agenti Jenkins multipli
+      include_tasks: jenkins_agent_single.yml
+      vars:
+        agent_name: "{{ agent_base_name }}-{{ item }}"
+        agent_ip: "{{ jenkins_master_ip.split('.')[0:3] | join('.') }}.{{ jenkins_master_ip.split('.')[-1] | int + item }}"
+        agent_host_path: "{{ agent_host_base_path }}-{{ item }}"
+      loop: "{{ range(1, agent_count + 1) | list }}"
+      loop_control:
+        index_var: agent_index
+
+    # === VERIFICA FINALE ===
+    - name: Verifica che il master Jenkins sia nella rete corretta
+      community.docker.docker_container:
+        name: jenkins-master
+        networks:
+          - name: "{{ docker_network_name }}"
+            ipv4_address: "{{ jenkins_master_ip }}"
+        networks_cli_compatible: false
+        comparisons:
+          networks: allow_more_present
+
+    - name: Verifica stato finale degli agenti
+      ansible.builtin.uri:
+        url: "{{ jenkins_master_url }}/computer/{{ agent_base_name }}-{{ item }}/api/json"
+        method: GET
+        user: "{{ jenkins_admin_user }}"
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: true
+        return_content: true
+        status_code: 200
+      register: agents_status
+      loop: "{{ range(1, agent_count + 1) | list }}"
+      failed_when: false
+
+    - name: Debug stato degli agenti
+      ansible.builtin.debug:
+        msg: |
+          Riepilogo agenti creati:
+          {% for i in range(agent_count) %}
+          - {{ agent_base_name }}-{{ i + 1 }}: {{ 'Online' if not (agents_status.results[i].json.offline | default(true)) else 'Offline' }}
+          {% endfor %}

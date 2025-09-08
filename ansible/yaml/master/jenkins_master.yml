@@ -1,0 +1,65 @@
+- name: Setup Jenkins Master - Soluzione Completa Funzionante
+  hosts: jenkins
+  become: true
+  vars:
+    jenkins_home_host_path: /var/jenkins_home
+    jenkins_master_url: "http://192.168.56.10:8080"
+    jenkins_admin_user: "admin"
+    jenkins_admin_password: "password"
+  tasks:
+    - name: Verifica lo stato del container jenkins-master
+      community.docker.docker_container_info:
+        name: jenkins-master
+      register: jenkins_container_status
+      
+    - name: Riavvia il container se fermo
+      community.docker.docker_container:
+        name: jenkins-master
+        state: started
+      when: jenkins_container_status.exists and (jenkins_container_status.container.State.Status == 'exited')
+      
+    - name: Ripristina la condizione di un'installazione pulita se non si è in presenza di un container esistente
+      when: not jenkins_container_status.exists
+      block:
+        - name: Cleanup ambiente precedente
+          ansible.builtin.include_tasks: cleanup.yml
+          
+        - name: Prepara le directory di Jenkins
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            mode: '0755'
+            owner: 1000
+            group: 1000
+          loop:
+            - "{{ jenkins_home_host_path }}"
+            - "{{ jenkins_home_host_path }}/plugins"
+            - "{{ jenkins_home_host_path }}/init.groovy.d"
+            
+        - name: Crea gli script Groovy da template
+          ansible.builtin.template:
+            src: "{{ item.src }}"
+            dest: "{{ jenkins_home_host_path }}/init.groovy.d/{{ item.dest }}"
+            owner: 1000
+            group: 1000
+            mode: '0644'
+          loop:
+            - { src: "template/init-plugins.groovy.j2", dest: "01-init-plugins.groovy" }
+            - { src: "template/init-config.groovy.j2", dest: "02-init-config.groovy" }
+            
+        - name: Avvia Jenkins con configurazione automatica
+          community.docker.docker_container:
+            name: jenkins-master
+            image: jenkins/jenkins:lts
+            ports:
+              - "8080:8080"
+              - "50000:50000"
+            volumes:
+              - "{{ jenkins_home_host_path }}:/var/jenkins_home"
+            env:
+              JAVA_OPTS: "-Djenkins.install.runSetupWizard=false"
+            state: started
+            restart_policy: always
+            
+        - name: Attendi che Jenkins sia pronto
+          ansible.builtin.include_tasks: wait_for_jenkins.yml

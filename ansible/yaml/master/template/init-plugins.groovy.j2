@@ -1,0 +1,55 @@
+#!groovy
+          
+import jenkins.model.Jenkins
+import hudson.model.UpdateSite
+import java.util.logging.Logger
+
+def logger = Logger.getLogger("")
+def instance = Jenkins.getInstance()
+def updateCenter = instance.getUpdateCenter()
+
+def plugins = [
+    "git",
+    "workflow-aggregator", 
+    "configuration-as-code",
+    "matrix-auth",
+    "credentials-binding",
+    "build-timeout",
+    "timestamper"
+]
+
+logger.info("Avvio installazione plugin essenziali...")
+
+// Aggiorna centro aggiornamenti
+updateCenter.updateAllSites()
+
+def futures = []
+
+plugins.each { pluginName ->
+    if (!instance.getPluginManager().getPlugin(pluginName)) {
+        logger.info("Installazione plugin: ${pluginName}")
+        def plugin = updateCenter.getPlugin(pluginName)
+        if (plugin) {
+            futures.add(plugin.deploy())
+        }
+    } else {
+        logger.info("Plugin già installato: ${pluginName}")
+    }
+}
+
+// Attendi completamento installazione
+futures.each { future ->
+    try {
+        future.get()
+    } catch (Exception e) {
+        logger.warning("Errore installazione plugin: ${e.message}")
+    }
+}
+
+// Richiedi riavvio se necessario
+if (!futures.isEmpty()) {
+    logger.info("Plugin installati. Riavvio necessario.")
+    instance.doSafeRestart(null)
+}
+
+logger.info("Configurazione plugin completata!")
